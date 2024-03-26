@@ -1,0 +1,122 @@
+---
+title: "Integration Function"
+output: html_notebook
+---
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(Matrix)
+library(glmGamPoi)
+library(sctransform)
+library(limma)
+library(clustree)
+library(pvclust)
+library(Hmisc)
+library(corrplot)
+library(ggcorrplot)
+library(stringr)
+library(biomaRt)
+source("/media/phylobrain/Windows/Users/rodri/Documents/R/win-library/4.1/corrplot/R/corrtry.R")
+source("/home/phylobrain/bioinfo/sc_phylobrain/ggcorrconfplot.R")
+```
+
+```{r}
+#Filtered Seurat
+integrated<-readRDS("integrated.rds")
+#if a preferred order of clusters is preferred
+species1_ct<-species1_ct
+species2_ct<-species2_ct
+#if a palette is stablished for each species UMAP
+colors_sp1<-colors_sp1
+colors_sp2<-colors_sp2
+```
+
+```{r , echo=FALSE}
+species1[['seurat_clusters']]<-species1[['species1_sct5_res2.8']]
+species2[['seurat_clusters']]<-species2[['species2_2']]
+Idents(species2)<-"seurat_clusters"
+Idents(species1) <- "seurat_clusters"
+```
+
+```{r}
+colors<-list(colors_sp1, colors_sp2) 
+order<-list(species1_ct, species2_ct) 
+initials<-list("SP1","SP2") 
+```
+
+# Markers Selection
+
+This tool was developed based on the SCT data of the integrated object. 
+
+```{r, echo=F}
+DefaultAssay(integrated)<-"SCT"
+integrated.list<-SplitObject(integrated, split.by = "Species")
+species1.makers<-FindAllMarkers(integrated.list$species1, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+species2.makers<-FindAllMarkers(integrated.list$species2, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+integrated.makers <-rbind(species1.makers,species2.makers)
+integrated.makers_mod <-integrated.makers %>% group_by(cluster) %>% filter(p_val_adj < 10^(-9)) %>% top_n(n=10, wt = avg_log2FC) %>% dplyr::select(gene)
+```
+
+However, this data can be obtained equivalently from SCT/Integrated of each species.
+
+#Modules generation
+
+```{r}
+length<-length(unique(integrated.makers_mod$cluster))
+for(i in 1:length){
+  celltype<-as.character(unique(integrated.makers_mod$cluster)[i])
+  cell.type<-str_replace(celltype, "-", ".")
+  features<- integrated.makers_mod %>% filter(cluster == celltype) 
+  integrated<-PercentageFeatureSet(integrated, assay= "SCT", features = features$gene, col.name = cell.type)
+  mean<-mean(integrated@meta.data[WhichCells(integrated, idents = celltype),cell.type])
+  integrated[[cell.type]]<-integrated@meta.data[[cell.type]]/mean
+}
+#Visualize modules stored in metadata (column number can vary)
+integrated@meta.data[,c(52:84)]
+```
+
+To visualize, we used DotPlat, a modified version of Seurat::DotPlot, that does not modify the counts stored. 
+
+```{r}
+DotPlat(integrated,  features = colnames(integrated@meta.data[,c(52:84)]), scale=F)+ RotatedAxis()+ scale_color_gradientn(colours = c("grey90", "gold","dark green"), limits=c(0,1))
+pdf("DotPlot_integrated.pdf", width = 10, height = 10)
+DotPlat(integrated,  features = colnames(integrated@meta.data[,c(52:84)]), scale=F)+ RotatedAxis()+ scale_color_gradientn(colours = c("grey90", "gold","dark green"), limits=c(0,1))
+dev.off()
+```
+
+#If Transcription Factor Only Modules
+
+You have to recover the Ensembl objects: TFdata_species1 (we assume that these datasets are conserved, but it can be modified to be specific)
+
+```{r}
+#we recover the original integrated.makers
+integrated.makers_TF<-merge(y=TFdata_species1, x=integrated.makers, by.y= "external_gene_name", by.x= "gene")
+#We filter again by the top4
+integrated.makers_mod <-integrated.makers_TF %>% group_by(cluster) %>% filter(p_val_adj < 10^(-9)) %>% top_n(n=4, wt = avg_log2FC) %>% dplyr::select(gene) %>% arrange(cluster)
+```
+
+```{r}
+length<-length(unique(integrated.makers_mod$cluster))
+for(i in 1:length){
+  celltype<-as.character(unique(integrated.makers_mod$cluster)[i])
+  cell.type<-str_replace(celltype, "-", ".")
+  features<- integrated.makers_mod %>% filter(cluster == celltype) 
+  integrated<-PercentageFeatureSet(integrated, assay= "SCT", features = features$gene, col.name = cell.type)
+  mean<-mean(integrated@meta.data[WhichCells(integrated, idents = celltype),cell.type])
+  integrated[[cell.type]]<-integrated@meta.data[[cell.type]]/mean
+}
+#Visualize modules stored in metadata (column number can vary)
+integrated@meta.data[,c(52:84)]
+```
+
+To visualize, we used a modified version of Seurat::DotPlot, that does not modify the counts stored. 
+
+```{r}
+DotPlat(integrated,  features = colnames(integrated@meta.data[,c(52:84)]), scale=F)+ RotatedAxis()+ scale_color_gradientn(colours = c("grey90", "gold","dark green"), limits=c(0,1))
+pdf("DotPlot_integrated_TF.pdf", width = 10, height = 10)
+DotPlat(integrated,  features = colnames(integrated@meta.data[,c(52:84)]), scale=F)+ RotatedAxis()+ scale_color_gradientn(colours = c("grey90", "gold","dark green"), limits=c(0,1))
+dev.off()
+```

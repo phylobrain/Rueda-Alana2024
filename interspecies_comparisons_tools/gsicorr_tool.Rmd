@@ -1,0 +1,228 @@
+---
+title: "GSI Correlation Function"
+output: html_notebook
+---
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(Matrix)
+library(glmGamPoi)
+library(sctransform)
+library(limma)
+library(clustree)
+library(pvclust)
+library(Hmisc)
+library(corrplot)
+library(ggcorrplot)
+library(stringr)
+library(biomaRt)
+source("/media/phylobrain/Windows/Users/rodri/Documents/R/win-library/4.1/corrplot/R/corrtry.R")
+source("/home/phylobrain/bioinfo/sc_phylobrain/ggcorrconfplot.R")
+```
+
+```{r}
+#Filtered Seurat
+species1<-mouse_day1_orth
+species2<-chicken_day1_orth
+#Cell types order
+species1_ct<-species1_ct
+species2_ct<-species2_ct
+```
+
+```{r , echo=FALSE}
+species1[['seurat_clusters']]<-species1[['species1_sct5_res2.8']]
+species2[['seurat_clusters']]<-species2[['species2_2']]
+Idents(species2)<-"seurat_clusters"
+Idents(species1) <- "seurat_clusters"
+```
+
+#Regular Label Transfer
+
+#Markers
+
+Although this would have alredy been done in the past, it is easier to get it again than save all gene markers. Or maybe not, it could be removed then. 
+
+```{r, echo=F}
+DefaultAssay(species1)<-"RNA"
+DefaultAssay(species2)<-"RNA"
+species1.markers<-FindAllMarkers(species1_orth, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+species2.markers<-FindAllMarkers(species2_orth, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+```
+
+#Top gene markers
+
+Select the most differentially expressed genes, the top 400 of each cluster ordered by |avg_log2FC| and filtered by p_val_adj < 10^(-9). This was set based on Colquitt, but it could be changed. 
+
+```{r, echo=F}
+species1.markers_top<-species1.markers %>% group_by(cluster) %>% filter(p_val_adj < 10^(-9)) %>% arrange(abs(avg_log2FC)) %>% top_n(n=400) %>% dplyr::select(gene)
+table(species1.markers_top$cluster)
+
+species2.markers_top<-species2.markers %>% group_by(cluster) %>% filter(p_val_adj < 10^(-9)) %>% arrange(abs(avg_log2FC)) %>% top_n(n=400) %>% dplyr::select(gene) 
+table(species2.markers_top$cluster)
+```
+
+The gene specificity index (GSI) is obtained for each species independently:
+
+#Top Markers Subset - species2
+
+
+```{r, echo=F}
+species2_top<-species2_orth
+species2_top
+species2_top[["SCT"]]@counts<-species2_top[["SCT"]]@counts[species2.markers_top$gene,]
+species2_top[["SCT"]]@data<-species2_top[["SCT"]]@data[species2.markers_top$gene,]
+species2_top[["SCT"]]@meta.features[species2.markers_top$gene,'cluster']<-species2.markers_top$cluster
+species2_top
+```
+#g coefficient - species2
+
+```{r, echo=F}
+Idents(species2_top)<-"seurat_clusters"
+species2_cluster.averages <- AverageExpression(species2_top, assays = "SCT")
+Idents(species2_top)<-"SCT_snn_res.0"
+species2_averages <- AverageExpression(species2_top, assays = "SCT")
+species2_g<-species2_cluster.averages$SCT/species2_averages$SCT[,1]
+head(species2_g)
+```
+
+
+#Top Markers Subset - species1
+
+
+```{r, echo=F}
+species1_top<-species1_orth
+species1_top
+species1_top[["SCT"]]@counts<-species1_top[["SCT"]]@counts[species1.markers_top$gene,]
+species1_top[["SCT"]]@data<-species1_top[["SCT"]]@data[species1.markers_top$gene,]
+species1_top[["SCT"]]@meta.features[species1.markers_top$gene,'cluster']<-species1.markers_top$cluster
+species1_top
+```
+
+#g coefficient - species1
+
+```{r, echo=F}
+Idents(species1_top)<-"seurat_clusters"
+species1_cluster.averages <- AverageExpression(species1_top, assays = "SCT")
+Idents(species1_top)<-"SCT_snn_res.0"
+species1_averages <- AverageExpression(species1_top, assays = "SCT")
+species1_g<-species1_cluster.averages$SCT/species1_averages$SCT[,1]
+head(species1_g)
+```
+
+#GSI Correlation
+
+Once the GSIs for each species and genes is generated. We compared the tendencies of these genes across the two species.
+
+
+```{r, echo=F}
+species2_gf<-as.matrix(species2_g[rownames(species2_g) %in% rownames(species1_g),])
+species2_gf<-species2_gf[,species2_ct]
+#To avoid possible common names of celltypes
+colnames(species2_gf)<-lapply(colnames(species2_gf), function(x) paste("S1", x, sep="-"))
+species1_gf<-as.matrix(species1_g[rownames(species1_g) %in% rownames(species2_g),])
+species1_gf<-species1_gf[,species1_ct]
+colnames(species1_gf)<-lapply(colnames(species1_gf), function(x) paste("S2", x, sep="-"))
+table(rownames(species1_gf) %in% rownames(species2_gf))
+#Step7: Merge Expression Tables
+geTable = merge(species2_gf,species1_gf, by='row.names', all=F)
+rownames(geTable) = geTable$Row.names
+geTable = geTable[,2:ncol(geTable)]
+gsi.cor<-cor(geTable, method = "spearman")
+gsi.cor
+```
+
+```{r, echo=F}
+#8b:  Shuffle data
+shuffled.cor.list = list()
+gsi   <- txtProgressBar(1, 100, style=3)
+nPermutations <- 100
+for (i in 1:nPermutations){
+  shuffled = apply(geTable[,1:ncol(species2_gf)],1,sample)
+  shuffled2 = apply(geTable[,(ncol(species2_gf)+1):ncol(geTable)],1,sample)
+  shuffled = cbind(t(shuffled),t(shuffled2))
+  shuffled.cor = cor(shuffled,method="spearman")
+  shuffled.cor.list[[i]] = shuffled.cor
+  rm(list=c('shuffled','shuffled2','shuffled.cor'))
+  if ((i %% 100) ==0){
+    setTxtProgressBar(gsi, (i*100)/nPermutations)
+  }
+}
+
+p.value.table = matrix(ncol=ncol(geTable), nrow = ncol(geTable))
+rownames(p.value.table) = colnames(geTable)
+colnames(p.value.table) = colnames(geTable)
+
+shuffled.mean.table = matrix(ncol=ncol(geTable), nrow = ncol(geTable))
+rownames(shuffled.mean.table) = colnames(geTable)
+colnames(shuffled.mean.table) = colnames(geTable)
+
+a = combn(1:ncol(geTable),2)
+for (i in 1:ncol(a)){
+  cor.scores = sapply(shuffled.cor.list,"[",a[1,i],a[2,i])
+  shuffled.mean.table[a[1,i],a[2,i]] = mean(cor.scores)
+  shuffled.mean.table[a[2,i],a[1,i]] = mean(cor.scores)
+  p.value = mean(abs(cor.scores)>=abs(gsi.cor[a[1,i],a[2,i]]))
+  p.value.table[a[1,i],a[2,i]] = p.value
+  p.value.table[a[2,i],a[1,i]] = p.value
+  rm(list=c('cor.scores','p.value'))
+  setTxtProgressBar(gsi, (i*100)/ncol(a))
+}
+p.value.table[1:ncol(species2_gf), (ncol(species2_gf)+1):ncol(gsi.cor)]
+neg.log10.p = -log10(p.value.table)
+```
+
+
+```{r}
+#step9 "Overlap in Markers"
+#for all pairs of cell-types genspecies2te list of genes that are at least 1.5x avg in both cells
+
+#from above a = combn(1:ncol(geTable),2)
+marker.overlap.list = list()
+for (i in 1:ncol(a)){
+  datasubset = cbind(geTable[,a[1,i]],geTable[,a[2,i]])
+  markers = rownames(geTable[datasubset[,1]>1.5 & datasubset[,2]>1.5,])
+  marker.overlap.list[[i]] = markers
+  names(marker.overlap.list)[i] = paste(colnames(geTable)[a[1,i]], colnames(geTable)[a[2,i]],sep='_')
+  rm(list=c('datasubset','markers'))
+}
+```
+
+```{r}
+#We remove the labels SP1/SP2 to make the plot with the original cell type names. The number should be modified dependently of the label le
+colnames(gsi.cor)<-str_sub(colnames(gsi.cor), start = 4)
+rownames(gsi.cor)<-str_sub(rownames(gsi.cor), start = 4)
+```
+
+The plot by default can be modified to obtain a more informative result.
+We have generated two versions depending on the color corresponding to max and min expression.
+The repeated chunk below each corrplot function is to generate a pdf out of it. 
+
+
+This plot considers positive as blue and negative as red. It is the default option of corrplot.
+
+```{r, fig.height=7, fig.width=10, echo=F}
+#plot it 
+#blue, max. red, min.
+p_inv<-1-p.value.table
+corrplot::corrplot(gsi.cor[(ncol(species2_gf)+1):ncol(gsi.cor),1:ncol(species2_gf)], order="original", tl.pos="lt", method="color", tl.col="black", is.corr=F,tl.cex=0.7, sig.level=(0.95),insig="pch", pch=5, p.mat=p_inv[(ncol(species2_gf)+1):ncol(gsi.cor),1:ncol(species2_gf)], pch.cex=0.15,pch.col="black",mar=c(3,1,5,1),cl.align.text="l")
+pdf("sp1vs2_cor.pdf")
+corrplot::corrplot(gsi.cor[(ncol(species2_gf)+1):ncol(gsi.cor),1:ncol(species2_gf)], order="original", tl.pos="lt", method="color", tl.col="black", is.corr=F,tl.cex=0.7, sig.level=(0.95),insig="pch", pch=5, p.mat=p_inv[(ncol(species2_gf)+1):ncol(gsi.cor),1:ncol(species2_gf)], pch.cex=0.15,pch.col="black",mar=c(3,1,5,1),cl.align.text="l")
+dev.off()
+```
+
+This plot considers high as red, and low as blue, as a heatmap. 
+
+
+```{r, fig.height=7, fig.width=10, echo=F}
+#plot it 
+#red, max. blue, min.
+p_inv<-1-p.value.table
+corrplot::corrplot(gsi.cor[(ncol(species2_gf)+1):ncol(gsi.cor),1:ncol(species2_gf)], order="original", tl.pos="lt", method="color", tl.col="black", is.corr=F,tl.cex=0.7, sig.level=(0.95),insig="pch", pch=5, p.mat=p_inv[(ncol(species2_gf)+1):ncol(gsi.cor),1:ncol(species2_gf)], pch.cex=0.15,pch.col="black",mar=c(3,1,5,1),cl.align.text="l",col=colorRampPalette(rev(brewer.pal(n=10, name = "RdBu")))(200))
+
+pdf("sp1vs2_cor_heat.pdf")
+corrplot::corrplot(gsi.cor[(ncol(species2_gf)+1):ncol(gsi.cor),1:ncol(species2_gf)], order="original", tl.pos="lt", method="color", tl.col="black", is.corr=F,tl.cex=0.7, sig.level=(0.95),insig="pch", pch=5, p.mat=p_inv[(ncol(species2_gf)+1):ncol(gsi.cor),1:ncol(species2_gf)], pch.cex=0.15,pch.col="black",mar=c(3,1,5,1),cl.align.text="l",col=colorRampPalette(rev(brewer.pal(n=10, name = "RdBu")))(200))
+dev.off()
+```

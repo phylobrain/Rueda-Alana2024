@@ -1,0 +1,145 @@
+---
+title: "Label Transfer Function"
+output: html_notebook
+---
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(Matrix)
+library(glmGamPoi)
+library(sctransform)
+library(limma)
+library(clustree)
+library(pvclust)
+library(Hmisc)
+library(corrplot)
+library(ggcorrplot)
+library(stringr)
+library(biomaRt)
+source("/media/phylobrain/Windows/Users/rodri/Documents/R/win-library/4.1/corrplot/R/corrtry.R")
+source("/home/phylobrain/bioinfo/sc_phylobrain/ggcorrconfplot.R")
+```
+
+```{r}
+query<-me9_orth
+ref<-cs12_orth
+query_ct<-me9_ct
+ref_ct<-cs12_ct
+```
+
+#Normalization per species (equivalent to query/ref)
+
+If more than one replicate
+
+```{r}
+DefaultAssay(species1_orth)<-"RNA"
+#Split by replicates
+species1_orth.list <- SplitObject(species1_orth, split.by = "orig.ident")
+species1_orth.list <- lapply(X = species1_orth.list, FUN = SCTransform, method = "glmGamPoi",  vars.to.regress = c("percent.mt", "G2M.Score", "S.Score"))
+features <- SelectIntegrationFeatures(object.list = species1_orth.list)
+species1_orth.list <- PrepSCTIntegration(object.list = species1_orth.list, anchor.features = features)
+species1_orth.list <- lapply(X = species1_orth.list, FUN = RunPCA, features = features)
+anchors <- FindIntegrationAnchors(object.list = species1_orth.list, reduction = "cca", dims = 1:20, normalization.method = "SCT", anchor.features = features)
+species1_orth <- IntegrateData(anchorset = anchors, normalization.method = "SCT", dims = 1:20)
+```
+
+Reconstruct and confirm the atlas
+
+```{r , echo=FALSE}
+species1_orth <- RunPCA(species1_orth, npcs = 50, verbose = FALSE)
+species1_orth <- RunUMAP(species1_orth, dims = 1:50)
+```
+
+If only one replicate per species 
+
+```{r , echo=FALSE}
+species1_orth <- SCTransform(species1_orth, method = "glmGamPoi")
+species1_orth <- RunPCA(species1_orth, npcs = 50, verbose = FALSE)
+species1_orth <- RunUMAP(species1_orth, dims = 1:50)
+```
+
+#Determine the order of your clusters 
+
+```{r}
+ref_ct<-c("msRGCs-01e","msRGCs-02e","msRGCs-03e","msRGCs-04e","msRGCs-05e") #species1_ct
+levels(ref)<-ref_ct
+query_ct<- c("ckRGCs-01e","ckRGCs-02e","ckRGCs-03e","ckRGCs-04e","ckRGCs-05e") #species2_ct
+query_ct<-str_split(query_ct, '\n')[[1]]
+query_ct<-unlist(query_ct)
+levels(query)<-query_ct
+```
+
+#Regular Label Transfer
+
+#q(uery)inr(eference)
+
+
+```{r , fig.height=10, fig.width=15, echo=FALSE}
+Idents(query) <- "seurat_clusters"
+Idents(ref) <- "seurat_clusters"
+pb_anchors_minh <- FindTransferAnchors(query = query, reference = ref, dims = 1:50, reference.reduction = "pca", normalization.method = "SCT")
+predictions <- TransferData(anchorset = pb_anchors_minh, refdata = ref$seurat_clusters, dims = 1:50)
+query <- AddMetaData(query, metadata = predictions)
+head(table(query$seurat_clusters,query$predicted.id))
+query <- RunUMAP(query, dims = 1:50, reduction = "pca", return.model = TRUE)
+query <- MapQuery(anchorset = pb_anchors_minh, reference = ref, query = query, refdata = list(celltype = "seurat_clusters"), reference.reduction = "pca", reduction.model = "umap")
+DimPlot(ref, reduction = "umap", group.by = "seurat_clusters", label = TRUE, label.size = 3, repel = TRUE) + ggtitle("Reference Chicken Annotations")+NoLegend()
+DimPlot(query, reduction = "ref.umap", group.by = "predicted.celltype", label = TRUE, label.size = 3, repel = TRUE) + ggtitle("Predicted Chicken Cell Types for Mouse Cells")+NoLegend()
+DimPlot(query, reduction = "ref.umap", group.by = "seurat_clusters", label = TRUE, label.size = 3, repel = TRUE) + ggtitle("Original Mouse Cell Types Transferred")+NoLegend()
+```
+
+#Visualization of Correlations
+
+```{r, echo=F, fig.width=12, fig.height=12}
+matches_qinr<-as.matrix(table(query$seurat_clusters, query$predicted.id))
+for(i in 1:nrow(matches_qinr)){
+  matches_qinr[i,]<-matches_qinr[i,]/sum(matches_qinr[i,])
+}
+dim(matches_qinr)
+matches_qinr<-matches_qinr[query_ct,]
+lacking_c<-matrix(data = rep(rep(0,length(query_ct)),length(ref_ct[which(ref_ct %nin% colnames(matches_qinr))])), nrow = length(query_ct), ncol = length(ref_ct[which(ref_ct %nin% colnames(matches_qinr))]), dimnames = list(query_ct, ref_ct[which(ref_ct %nin% colnames(matches_qinr))]))
+matches_qinr<-cbind(matches_qinr, lacking_c)
+matches_qinr<-matches_qinr[,ref_ct]
+```
+
+
+```{r}
+corrplot(matches_qinr, method="shade", tl.col = "black", col.lim = c(0,1), col=colorRampPalette(c("blue","white","dark green"))(200))
+corrplot(matches_qinr, method="shade", tl.col = "black", col.lim = c(0,1))
+corrplot(matches_qinr, method="shade", tl.col = "black", col.lim = c(0,1), addgrid.col = "black")
+```
+
+```{r, echo=FALSE}
+ggcorrplot(matches_qinr, method="circle",outline.color = "black")+ scale_fill_gradient2(limit =c(0,1), low = "white", high =  "black")
+```
+
+#Visualization of prediction.score.max
+
+```{r}
+pred_data<-merge(query[[c("seurat_clusters", "percent.mt")]], predictions, by=0)
+rownames(pred_data)<-pred_data[,1]
+pred_data<- pred_data %>% dplyr::select(seurat_clusters, predicted.id, prediction.score.max) 
+qinr_m<-matches_qinr
+for(i in 1:ncol(qinr_m)){
+  for(j in 1:nrow(qinr_m)){
+    mean<-pred_data %>% filter(seurat_clusters==rownames(qinr_m)[j], predicted.id==colnames(qinr_m)[i]) %>% summarise(mean(prediction.score.max))
+    qinr_m[j,i]<-mean$`mean(prediction.score.max)`
+    if(is.na(qinr_m[j,i])==T){qinr_m[j,i]<-0}
+  }
+}
+qinr_m
+```
+
+
+
+```{r, fig.width=12, fig.height=12}
+corrtry(matches_qinr, score=qinr_m, method="circle", tl.col = "black", col.lim = c(0,1), addgrid.col = NULL, col=colorRampPalette(c("blue","grey99","orange3"))(200))
+#the blue in the palette has no effect...
+```
+
+```{r, fig.height=10, fig.width=15, echo=FALSE}
+ggcorrconfplot(matches_qinr, conf = qinr_m, method="circle",outline.color = "black")
+```

@@ -1,0 +1,261 @@
+---
+title: "Integration Function"
+output: html_notebook
+---
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(Matrix)
+library(glmGamPoi)
+library(sctransform)
+library(limma)
+library(clustree)
+library(pvclust)
+library(Hmisc)
+library(corrplot)
+library(ggcorrplot)
+library(stringr)
+library(biomaRt)
+source("/media/phylobrain/Windows/Users/rodri/Documents/R/win-library/4.1/corrplot/R/corrtry.R")
+source("/home/phylobrain/bioinfo/sc_phylobrain/ggcorrconfplot.R")
+```
+
+```{r}
+#Filtered Seurat
+species1<-mouse_day1_orth
+species2<-chicken_day1_orth
+#if a preferred order of clusters is preferred
+species1_ct<-species1_ct
+species2_ct<-species2_ct
+#if a palette is stablished for each species UMAP
+colors_sp1<-colors_sp1
+colors_sp2<-colors_sp2
+```
+
+```{r , echo=FALSE}
+species1[['seurat_clusters']]<-species1[['species1_sct5_res2.8']]
+species2[['seurat_clusters']]<-species2[['species2_2']]
+Idents(species2)<-"seurat_clusters"
+Idents(species1) <- "seurat_clusters"
+```
+
+```{r}
+colors<-list(colors_sp1, colors_sp2) 
+order<-list(species1_ct, species2_ct) 
+initials<-list("SP1","SP2") 
+```
+
+#Regular Integration
+
+```{r}
+DefaultAssay(species1)<-"RNA"
+species1.list <- SplitObject(species1, split.by = "orig.ident")
+species1.list <- lapply(X = species1.list, FUN = SCTransform, method = "glmGamPoi",  vars.to.regress = c("percent.mt", "G2M.Score", "S.Score"), variable.features.n = 2000)
+DefaultAssay(species2)<-"RNA"
+species2.list <- SplitObject(species2, split.by="orig.ident")
+species2.list <- lapply(X = species2.list, FUN = SCTransform, method = "glmGamPoi",  vars.to.regress = c("S.Score", "G2M.Score","percent.mt"), variable.features.n = 2000)
+integrated.list <- c(species1.list, species2.list)
+features <- SelectIntegrationFeatures(object.list = integrated.list, nfeatures = 2000)
+integrated.list <- PrepSCTIntegration(object.list = integrated.list, anchor.features = features)
+integrated.list <- lapply(X = integrated.list, FUN = RunPCA, features = features)
+anchors <- FindIntegrationAnchors(object.list = integrated.list, reduction = "rpca", dims = 1:50, normalization.method = "SCT", anchor.features = features) #It could be selected "cca" as reduction
+integrated <- IntegrateData(anchorset = anchors, normalization.method = "SCT", dims = 1:50)
+```
+
+```{r, echo=FALSE}
+integrated[["Species"]]<-"Species"
+#Identify the orig.ident specific for each species and modify conveniently the Species meta.data
+table(integrated@meta.data$orig.ident)
+integrated[["Species"]][grep("^s", rownames(integrated@meta.data)),]<-"Species1"
+integrated[["Species"]][grep("^X", rownames(integrated@meta.data)),]<-"Species2"
+#Confirm
+table(integrated[["Species"]])
+#Generate the cell_types meta.data with the seurat_clusters info, seurat_clusters will dissapear once reclustering is done
+integrated[["cell_types"]]<-"Animals"
+integrated[["cell_types"]]<- integrated@meta.data$seurat_clusters
+table(integrated[["cell_types"]])
+```
+
+
+# Integration
+
+```{r , echo=FALSE}
+integrated <- RunPCA(integrated, npcs = 50, verbose = FALSE)
+integrated <- FindNeighbors(integrated, dims = 1:50)
+#These resolutions are iterative, you must tune the parameter to obtain the representation of the cell types present in the original atlases.
+integrated <- FindClusters(integrated, resolution = c(2,2.5,3))
+integrated <- RunUMAP(integrated, dims = 1:50)
+```
+
+#Integrated Atlas
+
+```{r}
+DimPlot(integrated, group.by = "Species")
+```
+
+```{r}
+DimPlot(integrated, group.by = "cell_types")
+```
+
+#Individual subsets of the integrated UMAP by cell_types
+
+```{r}
+n<-unique(integrated@meta.data$Species)
+for(i in 1:length(n)){
+  Idents(integrated)<-"Species"
+  indiv<-subset(integrated, idents= n[i])
+  DimPlot(indiv, group.by = "cell_types")
+  Idents(indiv)<-"cell_types"
+  levels(indiv)<- lapply(order[[i]], function(x) paste(initials[[i]], x, sep="-"))
+  print(DimPlot(indiv, label = T)+NoLegend() # +scale_color_manual(values = unname(colors[[i]])))
+}
+#Save the plots as pdf
+pdf("integrated_Sp1vsSp2_cell_types.pdf", width = 9, height = 6)
+n<-unique(integrated@meta.data$Species)
+for(i in 1:length(n)){
+  Idents(integrated)<-"Species"
+  indiv<-subset(integrated, idents= n[i])
+  DimPlot(indiv, group.by = "cell_types")
+  Idents(indiv)<-"cell_types"
+  levels(indiv)<- lapply(order[[i]], function(x) paste(initials[[i]], x, sep="-"))
+  print(DimPlot(indiv, label = T)+NoLegend() # +scale_color_manual(values = unname(colors[[i]])))
+}
+dev.off()
+```
+
+#Gene Expression
+
+Visualization of marker genes for each cluster 
+
+```{r}
+genes_fig5d<-c("Pdgfra","Aldoc","Ascl1","Dlx1","Neurod2","Reln")
+for(i in 1:length(genes_fig5d)){print(FeaturePlot(bs_e12p3_all, features = genes_fig5d[i]))}
+```
+
+#Reclusterized Cell Types
+
+```{r}
+DimPlot(integrated, group.by = "integrated_snn_res.2")
+```
+
+#Individual subsets of the integrated UMAP by integrated_snn_res.2
+
+```{r}
+n<-unique(integrated@meta.data$Species)
+for(i in 1:length(n)){
+  Idents(integrated)<-"Species"
+  indiv<-subset(integrated, idents= n[i])
+  DimPlot(indiv, group.by = "integrated_snn_res.2")
+  Idents(indiv)<-"integrated_snn_res.2"
+  levels(indiv)<- lapply(order[[i]], function(x) paste(initials[[i]], x, sep="-"))
+  print(DimPlot(indiv, label = T)+NoLegend())
+}
+#Save the plots as pdf
+pdf("integrated_Sp1vsSp2_newres.pdf", width = 9, height = 6)
+n<-unique(integrated@meta.data$Species)
+for(i in 1:length(n)){
+  Idents(integrated)<-"Species"
+  indiv<-subset(integrated, idents= n[i])
+  DimPlot(indiv, group.by = "integrated_snn_res.2")
+  Idents(indiv)<-"integrated_snn_res.2"
+  levels(indiv)<- lapply(order[[i]], function(x) paste(initials[[i]], x, sep="-"))
+  print(DimPlot(indiv, label = T)+NoLegend())
+}
+dev.off()
+```
+
+#ReNaming New Clusters
+
+```{r}
+Idents(integrated)<-"integrated_snn_res.2"
+DimPlot(integrated, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+integrated <- RenameIdents(integrated, "27"="","17"="", "30"="", "10"="", "2"="","25"="","19"="","22"="","18"="", "3"="","20"="", "8"="", "6"="","5"="","28"="","12"="","7"="", "21"="","11"="", "32"="","1"="","16"="")
+integrated[["integrated"]]<-Idents(integrated)
+p1<-DimPlot(integrated, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+p1
+```
+
+```{r}
+#Determine the desired order of clusters (integrated_ct)
+integrated_ct<-c("","")
+levels(integrated)<-integrated_ct
+saveRDS(integrated, "integrated.rds")
+```
+
+
+# Species Proportion - BarPlot
+
+
+```{r}
+Idents(integrated)<-"integrated"
+per<-table(integrated@meta.data$integrated, integrated@meta.data$Species)
+percent<-data.frame(per[,1], per[,2])
+colnames(percent)<-c("Species1","Species2")
+percent2<-percent
+for(i in 1:ncol(percent2)){
+  percent2[,i]<-percent2[,i]/colSums(percent2)[i]
+}
+percent3<-percent2/rowSums(percent2)
+percent3$Clusters<-rownames(percent3)
+percent4<-percent3 %>% pivot_longer(cols = c(Species1, Species2), names_to = "Species", values_to = "Percent")
+percent4$Round<-round(percent4$Percent*100)
+percent4$Percent<-round(percent4$Percent, digits = 3)
+#percent4$Clusters<-factor(percent4$Clusters, levels = sort(unique(percent4$Clusters)))
+percent_int <- percent4
+p1<-percent_int %>% ggplot(aes(x = Clusters, y = Percent, fill = factor(Species, levels = c("Species1","Species2"))))+
+  geom_bar(stat = "identity") + geom_text(aes(label = paste(Round,"%"), y = Percent), position = position_stack(vjust = 0.5))+  coord_flip()+ labs(x = "Cluster", y = "Percentage",fill = "Species")+scale_fill_manual(values = c("steelblue3", "firebrick2"))
+p1
+```
+
+Save the plot
+
+```{r, fig.height=10, fig.width=7}
+pdf("proportion_Sp1vsSp2.pdf", width = 7, height = 10)
+percent_int %>% ggplot(aes(x = factor(Clusters, levels = rev(pb_ct)), y = Percent, fill = factor(Species, levels = c("Species1","Species2"))))+
+  geom_bar(stat = "identity") + geom_text(aes(label = paste(Round,"%"), y = Percent), position = position_stack(vjust = 0.5))+  coord_flip()+ labs(x = "Cluster", y = "Percentage",fill = "Species")+scale_fill_manual(values = c("steelblue3", "firebrick2"))
+dev.off()
+``` 
+
+
+# New Cell Types Dendrogram 
+
+For creating this dendrogram, it is needed to run the barplot code.
+The colors of the branches depend on the proportion of cells coming from the original species.
+Blue dominated is Mouse and Red dominated is Chicken, Purple is Mixed. 
+
+
+```{r}
+integrated.data<-AverageExpression(integrated, assays="SCT", group.by = "integrated")$SCT
+integrated.cor<-cor(integrated.data, integrated.data, method = "spearman")
+integrated.cor
+```
+
+
+```{r, fig.height=4, fig.width=10, echo=F}
+library(dendextend)
+integrated.cor.dist<-dist(integrated.cor)
+dend<-hclust(integrated.cor.dist, method = "ward.D2")
+order<-integrated_ct
+colors<-dend$order #it has no meaning, it is just to create a vector with the proper length
+for(i in 1:length(dend$order)){
+cluster<-percent4[percent4$Clusters == order[i],]
+blue<-cluster[cluster$Species == "Mouse","Percent"]/100
+red<-cluster[cluster$Species == "Chicken","Percent"]/100
+if(blue>0.5){
+colors[i]<-rgb(red*2, blue=0, 1) } else{
+  colors[i]<-rgb(1, blue=0, blue*2)
+}
+}
+col2rgb(colors, alpha = FALSE)
+colors
+```
+
+```{r}
+dend %>% as.dendrogram()  %>% set("branches_col", value="grey") %>% set("branches_k_col", value=colors, k=10) %>% set("leaves_pch", 17) %>% set("leaves_cex", 2) %>% set("leaves_col", value=colors, k=9) %>% set("branches_lwd", 4) %>% plot()
+pdf("dendrogram_Sp1vsSp2.pdf", height = 4, width = 10)
+dend %>% as.dendrogram()  %>% set("branches_col", value="grey") %>% set("branches_k_col", value=colors, k=10) %>% set("leaves_pch", 17) %>% set("leaves_cex", 2) %>% set("leaves_col", value=colors, k=9) %>% set("branches_lwd", 4) %>% plot()
+dev.off()
+```

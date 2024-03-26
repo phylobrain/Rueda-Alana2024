@@ -1,0 +1,165 @@
+---
+title: "Orthologues Filtering Function"
+output: html_notebook
+---
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(Matrix)
+library(glmGamPoi)
+library(sctransform)
+library(limma)
+library(clustree)
+library(pvclust)
+library(Hmisc)
+library(corrplot)
+library(ggcorrplot)
+library(stringr)
+library(biomaRt)
+source("/media/phylobrain/Windows/Users/rodri/Documents/R/win-library/4.1/corrplot/R/corrtry.R")
+source("/home/phylobrain/bioinfo/sc_phylobrain/ggcorrconfplot.R")
+```
+
+#Downloading of Ensembl Databases (biomaRt)
+
+
+## 1to1 orthologs
+
+Obtain orthologs names, the substitution step will be done at the end though
+
+## species1 genes 1to1
+
+```{r cars}
+if(exists("ensembl")==F){
+ensembl<-useMart("ensembl")}
+datasets <- listDatasets(ensembl)
+if(exists("species1")==F){
+species1<-useDataset("mmusculus_gene_ensembl", mart=ensembl)}
+attributes = c("external_gene_name", "ensembl_gene_id", "ggallus_homolog_ensembl_gene","ggallus_homolog_perc_id_r1", "ggallus_homolog_orthology_type", "ggallus_homolog_subtype", "ggallus_homolog_perc_id")
+species1_genes <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"), mart = species1)
+for(i in 1:length(species1_genes[,1])){
+  if(species1_genes[i,1]==""){
+    species1_genes[i,1]<-species1_genes[i,2]
+  }
+}
+orth.species1 = getBM(attributes, filters="with_ggallus_homolog",values=TRUE, mart = species1, bmHeader=FALSE)
+for(i in 1:length(orth.species1[,1])){
+  if(orth.species1[i,1]==""){
+    orth.species1[i,1]<-orth.species1[i,2]
+  }
+}
+orth.species1<-orth.species1[which(orth.species1$ggallus_homolog_orthology_type=="ortholog_one2one"),]
+ensembl.species1<- orth.species1[,2]
+external.species1<-orth.species1[,1]
+rownames(orth.species1)<-ensembl.species1
+TFdata_species1 <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"),filters = 'go', values = c('GO:0006366', 'GO:0000981', 'GO:0003700', 'GO:0006383', 'GO:0000995', 'GO:0001228', 'GO:0001227'), mart = species1)
+```
+
+## species2 genes 1to1
+
+```{r cars}
+if(exists("ensembl")==F){
+ensembl<-useMart("ensembl")}
+datasets <- listDatasets(ensembl)
+if(exists("species2")==F){
+species2<-useDataset("ggallus_gene_ensembl", mart=ensembl)}
+attributes = c("external_gene_name", "ensembl_gene_id", "mmusculus_homolog_ensembl_gene","mmusculus_homolog_perc_id_r1", "mmusculus_homolog_orthology_type", "mmusculus_homolog_subtype", "mmusculus_homolog_perc_id")
+species2_genes <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"), mart = species2)
+for(i in 1:length(species2_genes[,1])){
+  if(species2_genes[i,1]==""){
+    species2_genes[i,1]<-species2_genes[i,2]
+  }
+}
+orth.species2 = getBM(attributes, filters="with_mmusculus_homolog",values=TRUE, mart = species2, bmHeader=FALSE)
+for(i in 1:length(orth.species2[,1])){
+  if(orth.species2[i,1]==""){
+    orth.species2[i,1]<-orth.species2[i,2]
+  }
+}
+orth.species2<-orth.species2[which(orth.species2$mmusculus_homolog_orthology_type=="ortholog_one2one"),]
+ensembl.species2<- orth.species2[,2]
+external.species2<-orth.species2[,1]
+rownames(orth.species2)<-ensembl.species2
+TFdata_species2 <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"),filters = 'go', values = c('GO:0006366', 'GO:0000981', 'GO:0003700', 'GO:0006383', 'GO:0000995', 'GO:0001228', 'GO:0001227'), mart = species2)
+```
+
+#Read annotated datasets and annotation
+
+```{r}
+#Filtered Seurat
+species1<-readRDS("species1_day1.rds")
+species2<-readRDS("species2_day1.rds")
+#if a preferred order of clusters is preferred
+species1_ct<-species1_ct
+species2_ct<-species2_ct
+#if a palette is stablished for each species UMAP
+colors_sp1<-colors_sp1
+colors_sp2<-colors_sp2
+```
+
+```{r , echo=FALSE}
+species1[['seurat_clusters']]<-species1[['species1_sct5_res2.8']]
+species2[['seurat_clusters']]<-species2[['species2_2']]
+Idents(species2)<-"seurat_clusters"
+Idents(species1) <- "seurat_clusters"
+```
+
+#Filtering 
+
+```{r}
+allDuplicated=function(x) duplicated(x) | duplicated(x, fromLast = T)
+```
+
+#Species1 - Filtering
+
+```{r cars, warning=FALSE}
+species1.data<-GetAssayData(object = species1, assay = "RNA")
+species1.data_ensembl<-merge(x=species_genes[,1:2], y=species1.data, by.x= "external_gene_name", by.y= "row.names")
+#species1.data_TF<-merge(x=TFdata_species2, y=species1.data_ensembl, by.x= "ensembl_gene_id", by.y= "ensembl_gene_id")
+#species1.data_TF<-species1.data_TF[,-c(2,3)]
+# If TFs are filtered, replace species1.data_ensembl by species1.data_TF
+species1.data_orth<-merge(x=orth.species1[,2:3], y=species1.data_ensembl, by.x= "ensembl_gene_id", by.y= "ensembl_gene_id")
+species1.data_orth<-species1.data_orth[,-c(1,3)]
+#Modify if not mmusculus
+species1.data_orth<-merge(x=species1_genes, y=species1.data_orth, by.x = "ensembl_gene_id", by.y = "mmusculus_homolog_ensembl_gene")
+species1.data_orth$external_gene_name<-sub('[.]','-',make.names(species1.data_orth$external_gene_name, unique=T))
+rownames(species1.data_orth)<-species1.data_orth$external_gene_name
+species1.data_orth<-species1.data_orth[,-c(1,2)]
+species1.data_orth<-Matrix(as.matrix(species1.data_orth),sparse=TRUE)
+species1_gene_assay <- CreateAssayObject(species1.data_orth)
+species1_orth[['RNA']] <- species1_gene_assay
+```
+
+#Species2 - Filtering
+
+
+```{r cars, warning=FALSE}
+species2.data<-GetAssayData(object = species2, assay = "RNA")
+species2.data_ensembl<-merge(x=species_genes[,1:2], y=species2.data, by.x= "external_gene_name", by.y= "row.names")
+#species2.data_TF<-merge(x=TFdata_species2, y=species2.data_ensembl, by.x= "ensembl_gene_id", by.y= "ensembl_gene_id")
+#species2.data_TF<-species2.data_TF[,-c(2,3)]
+# If TFs are filtered, replace species2.data_ensembl by species2.data_TF
+species2.data_orth<-merge(x=orth.species2[,2:3], y=species2.data_ensembl, by.x= "ensembl_gene_id", by.y= "ensembl_gene_id")
+species2.data_orth<-species2.data_orth[,-c(1,3)]
+#Modify if not mmusculus
+species2.data_orth<-merge(x=species1_genes, y=species2.data_orth, by.x = "ensembl_gene_id", by.y = "mmusculus_homolog_ensembl_gene")
+species2.data_orth$external_gene_name<-sub('[.]','-',make.names(species2.data_orth$external_gene_name, unique=T))
+rownames(species2.data_orth)<-species2.data_orth$external_gene_name
+species2.data_orth<-species2.data_orth[,-c(1,2)]
+species2.data_orth<-Matrix(as.matrix(species2.data_orth),sparse=TRUE)
+species2_gene_assay <- CreateAssayObject(species2.data_orth)
+species2_orth[['RNA']] <- species2_gene_assay
+```
+
+It might be needed to normalizate or integrate, depending on the tool employed for cross-species comparisons.
+
+
+#Regular Integration
+
+```{r}
+saveRDS(species1_orth, "species1_orth.rds")
+saveRDS(species2_orth, "species2_orth.rds")
+```
