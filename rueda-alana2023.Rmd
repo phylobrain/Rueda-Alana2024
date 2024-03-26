@@ -1,0 +1,86 @@
+---
+title: "Visualization Rueda-Alaña 2023"
+author: "phylobrain"
+date: "2023-11-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(Seurat)
+```
+
+## Import Seurat Object
+
+```{r import}
+path_to_bs_e12p3_all = "BirthSeq_E12-P3_AllCells.rds"
+bs_e12p3_all <- readRDS(path_to_bs_e12p3_all)
+```
+
+## Pre-proccessing
+
+The Seurat object has 3 different assays: RNA, raw counts; SCT, normalized; integrated, corrected batch effect. 
+If you want to replicate this steps, this is the code. Subtle variations are expected due to version differences:
+
+```
+DefaultAssay(mp2_2)<-"RNA"
+bs_e12p3.list <- SplitObject(mp2_2, split.by="orig.ident")
+bs_e12p3.list <- lapply(X = bs_e12p3.list, FUN = SCTransform, method = "glmGamPoi",  vars.to.regress = c("S.Score", "G2M.Score","percent.mt"))
+features <- SelectIntegrationFeatures(object.list = bs_e12p3.list, nfeatures = 10000)
+bs_e12p3.list <- PrepSCTIntegration(object.list = bs_e12p3.list, anchor.features = features)
+bs_e12p3.list <- lapply(X = bs_e12p3.list, FUN = RunPCA, features = features)
+anchors <- FindIntegrationAnchors(object.list = bs_e12p3.list, reduction = "rpca", dims = 1:50, normalization.method = "SCT", anchor.features = features)
+mp2_2 <- IntegrateData(anchorset = anchors, normalization.method = "SCT", dims = 1:50)
+```
+
+# Visualization 
+
+Apart from the QC parameters, the following annotation can be found: 
+"CellType": General annotation used for Fig5C
+
+```{r metadata, echo=FALSE}
+DimPlot(bs_e12p3_all, group.by = "CellType")
+```
+
+Visualization of marker genes for each cluster 
+
+```{r}
+genes_fig5d<-c("Pdgfra","Aldoc","Ascl1","Dlx1","Neurod2","Reln")
+for(i in 1:length(genes_fig5d)){print(FeaturePlot(bs_e12p3_all, features = genes_fig5d[i]))}
+```
+
+# Neuron subsetting
+
+For further study of the dataset and annotation, the neuronal population were subsetted based on previous annotation and discarded low quality clusters.
+
+The data was again preprocessed with the recalculation of QC features.
+
+To import the already proccessed object:
+
+# Import 
+
+```{r}
+path_to_bs_e12p3_neurons = "BirthSeq_E12-P3_Neurons.rds"
+bs_e12p3_neurons <- readRDS(path_to_bs_e12p3_neurons)
+```
+
+# Visualization 
+
+Apart from the QC parameters, the following annotation can be found: 
+"CellType": General annotation used for Fig5C
+"Named_Subclustering": Subclustering annotation used for Fig5E
+
+```{r metadata, echo=FALSE}
+DimPlot(bs_e12p3_neurons, group.by = "CellType")
+```
+
+```{r metadata, echo=FALSE}
+DimPlot(bs_e12p3_neurons, group.by = "Named_Subclustering")
+```
+
+Visualization of marker genes for each cluster 
+
+```{r}
+genes_fig5g<-c("Cxcl12","Trp73","Lhx5","Snhg11","Reln")
+for(i in 1:length(genes_fig5g)){print(FeaturePlot(bs_e12p3_neurons, features = genes_fig5g[i]))}
+```
