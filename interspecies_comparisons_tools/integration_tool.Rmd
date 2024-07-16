@@ -34,6 +34,7 @@ species2_ct<-species2_ct
 colors_sp1<-colors_sp1
 colors_sp2<-colors_sp2
 ```
+#Select the same number of cells if needed
 
 ```{r , echo=FALSE}
 species1[['seurat_clusters']]<-species1[['species1_sct5_res2.8']]
